@@ -293,6 +293,35 @@ def display_analysis_tab():
             step=10,
             help="Geçmiş gün sayısı"
         )
+
+        # Kaydedilmiş model kullanma seçeneği
+        st.markdown("---")
+        st.subheader("💾 Model Önbelleği")
+        use_cached_model = st.checkbox(
+            "Kaydedilmiş Modeli Kullan",
+            value=False,
+            help="Daha önce eğitilmiş bir modeli yeniden kullan. Eğitim süresini atlar."
+        )
+        cached_model_path = None
+        if use_cached_model:
+            import glob
+            saved_models = sorted(
+                glob.glob("models/training_history/*.keras"),
+                reverse=True  # En yeni en üstte
+            )
+            if saved_models:
+                model_labels = [os.path.basename(m).replace("_best.keras", "") for m in saved_models]
+                selected_label = st.selectbox(
+                    "Model Seç",
+                    options=model_labels,
+                    help="En son eğitilmiş modeller listeleniyor"
+                )
+                if selected_label:
+                    cached_model_path = f"models/training_history/{selected_label}_best.keras"
+                    st.success(f"✅ Seçilen model: {selected_label}")
+            else:
+                st.warning("⚠️ Henüz kaydedilmiş model yok. İlk analizde model otomatik kaydedilir.")
+                use_cached_model = False
         
         st.subheader("Duygu Analizi")
         sentiment_method = st.selectbox(
@@ -389,7 +418,9 @@ def display_analysis_tab():
             use_gemini=use_gemini,
             gemini_api_key=gemini_api_key,
             gemini_top_n=gemini_top_n,
-            bert_weight=bert_weight
+            bert_weight=bert_weight,
+            use_cached_model=use_cached_model,
+            cached_model_path=cached_model_path
         )
     else:
         # İlk açılış mesajı
@@ -433,7 +464,9 @@ def run_analysis(
     use_gemini: bool = False,
     gemini_api_key: str = "",
     gemini_top_n: int = 20,
-    bert_weight: float = 0.5
+    bert_weight: float = 0.5,
+    use_cached_model: bool = False,
+    cached_model_path: str = None
 ):
     """
     Tam analiz sürecini çalıştırır.
@@ -448,10 +481,12 @@ def run_analysis(
         enable_news_filter: Haber filtreleme aktif mi
         min_relevance: Minimum ilişki skoru
         selected_rss_feeds: Kullanılacak RSS kaynakları listesi (None ise tümü)
-        use_gemini: Gemini LLM desteği aktif mi
-        gemini_api_key: Gemini API anahtarı
-        gemini_top_n: Gemini'ye gönderilecek maksimum haber sayısı
+        use_gemini: Groq LLM desteği aktif mi
+        gemini_api_key: Groq API anahtarı (https://console.groq.com)
+        gemini_top_n: Groq'a gönderilecek maksimum haber sayısı
         bert_weight: Hibrit skorlamada BERT ağırlığı
+        use_cached_model: Kaydedilmiş model kullanılsın mı
+        cached_model_path: Kullanılacak model dosyasının yolu
     """
     # Import modülleri
     from src.news_fetcher import fetch_rss_news, save_news
@@ -640,7 +675,7 @@ def run_analysis(
                         news_df,
                         symbol=symbol,
                         top_n=gemini_top_n,
-                        delay=2.0
+                        delay=0.5
                     )
 
                     analyzed_count = int(news_df_llm['llm_analyzed'].sum())
@@ -738,71 +773,68 @@ def run_analysis(
         
         # 4.1 LSTM Modeli
         st.subheader("4.1 LSTM Modeli (Fiyat Tahmini)")
-        with st.spinner("LSTM modeli eğitiliyor..."):
+        with st.spinner("LSTM modeli hazırlanıyor..."):
             try:
-                # Model değerlendirme fonksiyonlarını import et
                 from src.model_evaluation import (
                     calculate_comprehensive_metrics,
                     save_model_report
                 )
                 from datetime import datetime
-                
+
                 # Eğitim verisi hazırla
                 X, y, scaler = prepare_training_data(
                     features_df,
                     target_column='close',
                     lookback=lstm_lookback
                 )
-                
-                # Train-test split
+
                 split_idx = int(len(X) * 0.8)
                 X_train, X_test = X[:split_idx], X[split_idx:]
                 y_train, y_test = y[:split_idx], y[split_idx:]
-                
+
                 st.info(f"Eğitim: {len(X_train)} örnek, Test: {len(X_test)} örnek")
-                
-                # Model oluştur
-                lstm_model = build_lstm_model(
-                    input_shape=(X_train.shape[1], X_train.shape[2])
-                )
-                
-                # Model adı oluştur (timestamp ile)
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                model_name = f"lstm_{symbol.replace('.IS', '')}_{timestamp}"
-                
-                # Model kayıt dizinini oluştur
+
                 os.makedirs('models/training_history/', exist_ok=True)
-                
-                # Model checkpoint yolu
-                model_save_path = f'models/training_history/{model_name}_best.keras'
-                
-                # Modeli eğit (model_save_path ile)
-                history = train_lstm_model(
-                    lstm_model,
-                    X_train,
-                    y_train,
-                    X_test,
-                    y_test,
-                    epochs=lstm_epochs,
-                    batch_size=32,
-                    model_save_path=model_save_path
-                )
-                
-                # Eğitim geçmişini CSV olarak kaydet
-                history_df = pd.DataFrame(history.history)
-                history_csv_path = f'models/training_history/{model_name}_history.csv'
-                history_df.to_csv(history_csv_path, index=False)
-                
-                st.success("✅ LSTM modeli eğitildi")
+
+                # Kaydedilmiş model varsa yükle, yoksa eğit
+                if use_cached_model and cached_model_path and os.path.exists(cached_model_path):
+                    import tensorflow as tf
+                    st.info(f"📂 Kaydedilmiş model yükleniyor: {os.path.basename(cached_model_path)}")
+                    lstm_model = tf.keras.models.load_model(cached_model_path)
+                    model_name = os.path.basename(cached_model_path).replace("_best.keras", "")
+                    st.success("✅ Model önbellekten yüklendi (eğitim atlandı)")
+                else:
+                    lstm_model = build_lstm_model(
+                        input_shape=(X_train.shape[1], X_train.shape[2])
+                    )
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    model_name = f"lstm_{symbol.replace('.IS', '')}_{timestamp}"
+                    model_save_path = f'models/training_history/{model_name}_best.keras'
+
+                    with st.spinner("LSTM modeli eğitiliyor..."):
+                        history = train_lstm_model(
+                            lstm_model, X_train, y_train, X_test, y_test,
+                            epochs=lstm_epochs, batch_size=32,
+                            model_save_path=model_save_path
+                        )
+
+                    history_df = pd.DataFrame(history.history)
+                    history_df.to_csv(
+                        f'models/training_history/{model_name}_history.csv', index=False
+                    )
+                    st.success("✅ LSTM modeli eğitildi ve kaydedildi")
                 
                 # Tahmin yap — scaler ile orijinal fiyat ölçeğine dönüştür
                 lstm_predictions = predict_lstm(lstm_model, X_test, scaler=scaler)
-                
-                # Basit metrikleri hesapla (backtest için)
-                lstm_metrics = calculate_metrics(y_test, lstm_predictions)
-                
-                # Kapsamlı metrikleri hesapla (model raporu için)
-                comprehensive_metrics = calculate_comprehensive_metrics(y_test, lstm_predictions)
+
+                # y_test normalize — gerçek fiyata çevir (metrik hesabı için)
+                y_test_real = scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
+
+                # Metrikler (her ikisi de gerçek TL cinsinden)
+                lstm_metrics = calculate_metrics(y_test_real, lstm_predictions)
+
+                # Kapsamlı metrikler
+                comprehensive_metrics = calculate_comprehensive_metrics(y_test_real, lstm_predictions)
                 
                 # Model raporunu kaydet
                 report_path = f'models/training_history/{model_name}_report.json'
@@ -822,7 +854,7 @@ def run_analysis(
                 results['lstm_predictions'] = lstm_predictions
                 results['lstm_metrics'] = lstm_metrics
                 results['comprehensive_metrics'] = comprehensive_metrics
-                results['y_test'] = y_test
+                results['y_test'] = y_test_real  # gerçek TL değerleri
                 results['scaler'] = scaler
                 results['model_name'] = model_name
 
@@ -922,12 +954,9 @@ def run_analysis(
         st.header("📉 5. Geriye Dönük Test")
         with st.spinner("Geriye dönük test yapılıyor..."):
             try:
-                # y_test normalize, gerçek fiyata çevir
-                actual_prices = scaler.inverse_transform(
-                    y_test.reshape(-1, 1)
-                ).flatten()
-
-                test_dates = features_df['date'].iloc[-len(y_test):].values
+                # y_test artık gerçek TL değerleri (results['y_test'] zaten dönüştürülmüş)
+                actual_prices = results['y_test']
+                test_dates = features_df['date'].iloc[-len(actual_prices):].values
 
                 # actual_prices bir eleman daha uzun olmalı (backtest gereksinimi)
                 actual_prices_extended = np.append(actual_prices, actual_prices[-1])
@@ -949,6 +978,8 @@ def run_analysis(
                     st.metric("İşlem Sayısı", backtest_results['num_trades'])
                 with col4:
                     st.metric("Son Sermaye", f"₺{backtest_results['final_capital']:.2f}")
+                if backtest_results.get('total_cost', 0) > 0:
+                    st.caption(f"💸 Toplam işlem maliyeti: ₺{backtest_results['total_cost']:.2f} (%0.1 komisyon)")
                 
                 results['backtest_results'] = backtest_results
                 results['test_dates'] = test_dates

@@ -219,25 +219,29 @@ class LLMAnalyzer:
         """
         BERT/Lexicon compound skorlarını LLM skorlarıyla ağırlıklı birleştirir.
         LLM tarafından analiz edilmemiş satırlarda sadece BERT skoru kullanılır.
+        İndeks uyumu satır konumuna göre değil, DataFrame index'ine göre yapılır.
         """
         merged = sentiment_df.copy()
 
         if 'llm_sentiment_score' not in news_df_with_llm.columns:
             return merged
 
-        llm_scores   = news_df_with_llm['llm_sentiment_score'].values
-        llm_analyzed = (
-            news_df_with_llm['llm_analyzed'].values
-            if 'llm_analyzed' in news_df_with_llm.columns
-            else [True] * len(news_df_with_llm)
-        )
+        # LLM skorlarını index'e göre eşleştir (konum bazlı değil)
+        llm_map = news_df_with_llm[news_df_with_llm.get('llm_analyzed', True)][
+            ['llm_sentiment_score']
+        ] if 'llm_analyzed' in news_df_with_llm.columns else news_df_with_llm[['llm_sentiment_score']]
 
         bert_compounds = merged['compound'].values.copy()
-        hybrid = [
-            bert_weight * b + llm_weight * float(llm_scores[i])
-            if i < len(llm_scores) and llm_analyzed[i] else b
-            for i, b in enumerate(bert_compounds)
-        ]
+        hybrid = []
+
+        for i, idx in enumerate(merged.index):
+            bert_val = bert_compounds[i]
+            # Aynı index'te LLM skoru var mı diye bak
+            if idx in llm_map.index and news_df_with_llm.at[idx, 'llm_analyzed']:
+                llm_val = float(news_df_with_llm.at[idx, 'llm_sentiment_score'])
+                hybrid.append(bert_weight * bert_val + llm_weight * llm_val)
+            else:
+                hybrid.append(bert_val)
 
         merged['compound_bert'] = bert_compounds
         merged['compound']      = hybrid

@@ -14,7 +14,8 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 def simple_backtest(
     predictions: np.ndarray,
     actual_prices: np.ndarray,
-    initial_capital: float = 10000.0
+    initial_capital: float = 10000.0,
+    transaction_cost: float = 0.001
 ) -> Dict[str, float]:
     """
     Basit geriye dönük test yapar.
@@ -27,6 +28,7 @@ def simple_backtest(
         predictions: Model tahminleri (fiyat tahminleri veya yön tahminleri)
         actual_prices: Gerçek fiyatlar
         initial_capital: Başlangıç sermayesi
+        transaction_cost: İşlem başına maliyet oranı (varsayılan: %0.1)
     
     Returns:
         Dictionary containing:
@@ -34,18 +36,18 @@ def simple_backtest(
             - accuracy: Doğruluk oranı (yüzde)
             - num_trades: İşlem sayısı
             - final_capital: Son sermaye
+            - total_cost: Toplam işlem maliyeti
     """
     if len(predictions) == 0 or len(actual_prices) == 0:
         return {
             'total_return': 0.0,
             'accuracy': 0.0,
             'num_trades': 0,
-            'final_capital': initial_capital
+            'final_capital': initial_capital,
+            'total_cost': 0.0
         }
     
     if len(predictions) != len(actual_prices) - 1:
-        # Tahminler bir sonraki günün fiyatını tahmin eder
-        # Bu yüzden actual_prices bir eleman daha uzun olmalı
         raise ValueError(
             f"Predictions length ({len(predictions)}) must be one less than "
             f"actual_prices length ({len(actual_prices)})"
@@ -56,13 +58,15 @@ def simple_backtest(
     num_trades = 0
     correct_predictions = 0
     total_predictions = 0
+    total_cost = 0.0
+    shares = 0.0
     
     for i in range(len(predictions)):
         current_price = actual_prices[i]
         next_price = actual_prices[i + 1]
         predicted_price = predictions[i]
         
-        # Yön tahmini: tahmin edilen fiyat mevcut fiyattan yüksek mi?
+        # Yön tahmini
         predicted_direction = 1 if predicted_price > current_price else 0
         actual_direction = 1 if next_price > current_price else 0
         
@@ -71,23 +75,32 @@ def simple_backtest(
             correct_predictions += 1
         total_predictions += 1
         
-        # Al-sat stratejisi
+        # Al-sat stratejisi — işlem maliyeti dahil
         if predicted_direction == 1 and position == 0:
-            # Yukarı tahmin ediyoruz ve pozisyonumuz yok -> Al
+            # Al: sermayenin %0.1'i komisyon
+            cost = capital * transaction_cost
+            total_cost += cost
+            capital -= cost
             shares = capital / current_price
             position = 1
             num_trades += 1
         elif predicted_direction == 0 and position == 1:
-            # Aşağı tahmin ediyoruz ve pozisyonumuz var -> Sat
-            capital = shares * current_price
+            # Sat: satış tutarının %0.1'i komisyon
+            gross = shares * current_price
+            cost = gross * transaction_cost
+            total_cost += cost
+            capital = gross - cost
             position = 0
+            shares = 0.0
             num_trades += 1
     
-    # Eğer hala pozisyon varsa, son fiyattan sat
+    # Hâlâ pozisyon varsa son fiyattan sat (komisyon dahil)
     if position == 1:
-        capital = shares * actual_prices[-1]
+        gross = shares * actual_prices[-1]
+        cost = gross * transaction_cost
+        total_cost += cost
+        capital = gross - cost
     
-    # Sonuçları hesapla
     total_return = ((capital - initial_capital) / initial_capital) * 100
     accuracy = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0.0
     
@@ -95,7 +108,8 @@ def simple_backtest(
         'total_return': total_return,
         'accuracy': accuracy,
         'num_trades': num_trades,
-        'final_capital': capital
+        'final_capital': capital,
+        'total_cost': total_cost
     }
 
 

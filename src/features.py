@@ -239,6 +239,15 @@ def merge_sentiment_with_prices(
     # Eksik duygu skorlarını 0 ile doldur (haberin olmadığı günler için)
     sentiment_cols_in_merged = [f'sentiment_{col}' for col in available_sentiment_cols]
     merged_df[sentiment_cols_in_merged] = merged_df[sentiment_cols_in_merged].fillna(0.0)
+
+    # Haber olan / olmayan günleri ayırt eden flag sütunu ekle
+    # Bu sayede model "duygu skoru sıfır" ile "haber yok" arasını öğrenebilir
+    merged_df['has_sentiment'] = merged_df[sentiment_cols_in_merged[0]].notna().astype(float)
+    # Not: fillna sonrası NaN kalmadı, bu yüzden birleştirme öncesi durumu işaretliyoruz
+    # Doğru yaklaşım: birleştirme öncesi hangi tarihlerde haber var bilgisini tut
+    merged_df['has_sentiment'] = merged_df['date'].isin(
+        pd.to_datetime(daily_sentiment['date'])
+    ).astype(float)
     
     # Tarihi tekrar datetime'a çevir
     merged_df['date'] = pd.to_datetime(merged_df['date'])

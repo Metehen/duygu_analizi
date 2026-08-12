@@ -69,6 +69,13 @@ def prepare_classification_data(df: pd.DataFrame, target_column: str = 'close') 
     # Hedef sütunu da özelliklerden çıkar (data leakage önleme)
     if target_col in X.columns:
         X = X.drop(columns=[target_col])
+
+    # Feature leakage önleme: EMA'lar doğrudan close'tan hesaplandığı için
+    # XGBoost close'u dolaylı olarak görür — bu sütunları çıkarıyoruz.
+    leaky_cols = [c for c in X.columns if c.startswith('ema_')]
+    if leaky_cols:
+        X = X.drop(columns=leaky_cols)
+        logger.info(f"Leakage önlemi: {leaky_cols} sütunları çıkarıldı")
     
     logger.info(f"Sınıflandırma verisi hazırlandı: {len(X)} örnek, {X.shape[1]} özellik")
     logger.info(f"Sınıf dağılımı - Yukarı: {y.sum()}, Aşağı: {len(y) - y.sum()}")

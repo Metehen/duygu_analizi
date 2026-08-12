@@ -114,8 +114,8 @@ XGBOOST_CONFIG = {
 
 # Duygu Analizi Ayarları
 SENTIMENT_METHOD = 'bert'  # 'bert' veya 'lexicon'
-BERT_MODEL = 'dbmdz/bert-base-turkish-cased'
-# Alternatif: 'savasy/bert-base-turkish-sentiment-cased'
+BERT_MODEL = 'savasy/bert-base-turkish-sentiment-cased'
+# Alternatif: 'dbmdz/bert-base-turkish-cased' (genel dil modeli, duygu için fine-tune edilmemiş)
 
 # Veri Yolları
 DATA_DIR = 'data/'
