@@ -1,3 +1,5 @@
+# Copyright (C) 2026  Metehen
+# Licensed under GNU AGPL v3. See LICENSE file for details.
 """
 XGBoost modeli modülü.
 Hisse senedi fiyat yönü tahmini (yukarı/aşağı) için XGBoost sınıflandırıcı.

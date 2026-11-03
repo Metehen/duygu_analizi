@@ -1,3 +1,5 @@
+# Copyright (C) 2026  Metehen
+# Licensed under GNU AGPL v3. See LICENSE file for details.
 """
 LLM Analiz Modülü — Groq API
 Haber analizi ve LSTM tahmin açıklaması için Groq API kullanır.

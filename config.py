@@ -1,3 +1,5 @@
+# Copyright (C) 2026  Metehen
+# Licensed under GNU AGPL v3. See LICENSE file for details.
 """
 Merkezi yapılandırma dosyası.
 Tüm sistem parametreleri ve ayarları burada tanımlanır.

@@ -1,7 +1,9 @@
+"# Copyright (C) 2026  Metehen
+# Licensed under GNU AGPL v3. See LICENSE file for details.
 """
 Streamlit Web Arayüzü
 Türkçe Ekonomi Haberleri Duygu Analizi & Hisse Tahmin Sistemi
-"""
+""""
 
 import streamlit as st
 import pandas as pd

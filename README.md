@@ -434,7 +434,15 @@ Bu deneysel bir projedir. Öneriler ve iyileştirmeler için:
 
 ## Lisans
 
-Bu proje eğitim ve araştırma amaçlıdır.
+Bu proje [GNU AGPL v3](LICENSE) lisansı altında dağıtılmaktadır.
+
+Copyright (C) 2026 Metehen
+
+Bu lisans:
+- Kodu kullanmanıza, değiştirmenize ve dağıtmanıza izin verir
+- Türev çalışmaların da aynı lisans altında açık kaynak olmasını zorunlu kılar
+- Web servisi olarak kullanımda bile kaynak kodu paylaşmayı gerektirir
+- Atıf (copyright notice) korunmalıdır
 
 ## İletişim
 
