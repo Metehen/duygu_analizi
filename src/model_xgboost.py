@@ -7,11 +7,11 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 import pickle
-import logging
 from typing import Dict, Tuple, Optional, Any
 from pathlib import Path
+from src.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def prepare_classification_data(df: pd.DataFrame, target_column: str = 'close') -> Tuple[pd.DataFrame, pd.Series]:

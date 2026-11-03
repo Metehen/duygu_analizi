@@ -10,11 +10,11 @@ Limitler: Dakikada 30 istek, günde 14.400 istek.
 import json
 import re
 import time
-import logging
+from src.logger import get_logger
 from typing import Dict, Optional
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Kullanılacak model — Groq'un en iyi ücretsiz Türkçe modeli
 GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -257,6 +257,3 @@ class LLMAnalyzer:
             'time_horizon':    'kısa'
         }
 
-
-# Geriye dönük uyumluluk — eski GeminiAnalyzer adını da çalıştır
-GeminiAnalyzer = LLMAnalyzer

@@ -1,39 +1,41 @@
-# Core Dependencies
-pandas>=2.0.0
-numpy>=1.24.0
+# ============================================================
+# Üretim bağımlılıkları
+# Versiyon numaraları: python -m pip show <paket> ile doğrulandı
+# Python 3.12.8 ile test edildi
+# ============================================================
 
-# Data Collection
-feedparser>=6.0.10
-requests>=2.31.0
-beautifulsoup4>=4.12.0
+# Temel
+pandas==3.0.5
+numpy==2.5.2
+python-dateutil==2.9.0
+pytz==2025.2
 
-# NLP and Sentiment Analysis
-transformers>=4.30.0
-torch>=2.0.0
-sentencepiece>=0.1.99
+# Veri toplama
+feedparser==6.0.14
+requests==2.34.2
+beautifulsoup4==4.15.0
 
-# Financial Data
-yfinance>=0.2.28
+# NLP ve duygu analizi
+transformers==4.52.4
+sentencepiece==0.2.0
+# torch: CPU kurulumu için → py -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch==2.7.0
 
-# Machine Learning
-scikit-learn>=1.3.0
-xgboost>=2.0.0
-tensorflow>=2.13.0
+# Finansal veri
+yfinance==1.5.2
 
-# Visualization
-matplotlib>=3.7.0
-plotly>=5.15.0
+# Makine öğrenmesi
+scikit-learn==1.9.0
+xgboost==3.4.0
+tensorflow==2.19.0
+scipy==1.18.0
 
-# Web Interface
-streamlit>=1.25.0
+# Görselleştirme
+matplotlib==3.11.1
+plotly==6.9.0
 
-# Testing
-pytest>=7.4.0
-hypothesis>=6.82.0
+# Web arayüzü
+streamlit==1.61.1
 
-# Utilities
-python-dateutil>=2.8.2
-pytz>=2023.3
-
-# LLM Integration
-groq>=0.9.0
+# LLM entegrasyonu
+groq==1.6.0

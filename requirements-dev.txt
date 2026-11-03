@@ -1,0 +1,15 @@
+# ============================================================
+# Geliştirme bağımlılıkları (üretimde gerekli değil)
+# Kurulum: py -m pip install -r requirements-dev.txt
+# ============================================================
+
+# Üretim bağımlılıklarını da dahil et
+-r requirements.txt
+
+# Test
+pytest==8.4.0
+hypothesis==6.135.1
+
+# Kod kalitesi (opsiyonel)
+# flake8==7.0.0
+# black==24.3.0

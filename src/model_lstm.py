@@ -8,16 +8,16 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 from typing import Tuple, Optional, Any
-import logging
 import os
 
 # Config'den parametreleri al
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import LSTM_CONFIG, MODELS_DIR
+from src.logger import get_logger
 
-# Logging ayarla
-logger = logging.getLogger(__name__)
+# Logging
+logger = get_logger(__name__)
 
 
 def build_lstm_model(
@@ -204,6 +204,125 @@ def train_lstm_model(
         logger.error(f"Model eğitimi sırasında hata: {str(e)}")
         raise
 
+
+
+def predict_lstm_with_uncertainty(
+    model: keras.Model,
+    X: np.ndarray,
+    scaler: Optional[Any] = None,
+    n_passes: int = 50,
+    confidence: float = 0.90
+) -> dict:
+    """
+    Monte Carlo Dropout ile tahmin yapar ve belirsizlik aralığı hesaplar.
+
+    Nasıl çalışır:
+        Dropout katmanları normalde yalnızca eğitim sırasında aktiftir.
+        MC Dropout'ta model tahmin modunda bile Dropout'u açık tutarak
+        aynı girdi için N kez farklı tahmin üretir. Bu dağılımın
+        ortalaması tahmini, standart sapması ise belirsizliği verir.
+
+    Args:
+        model:      Eğitilmiş LSTM modeli (Dropout katmanları içermeli)
+        X:          Girdi verileri, shape (samples, timesteps, features)
+        scaler:     Normalizasyon scalerı — verilmişse tahminler orijinal
+                    ölçeğe dönüştürülür (predict_lstm ile aynı davranış)
+        n_passes:   Monte Carlo forward pass sayısı. Daha yüksek = daha
+                    kararlı belirsizlik tahmini, daha yavaş. Önerilen: 50
+        confidence: Güven aralığı genişliği (0.0-1.0). 0.90 → %90 CI.
+
+    Returns:
+        {
+            'mean':       np.ndarray — ortalama tahmin (orijinal ölçekte)
+            'std':        np.ndarray — standart sapma (belirsizlik)
+            'lower':      np.ndarray — güven aralığı alt sınırı
+            'upper':      np.ndarray — güven aralığı üst sınırı
+            'confidence': float      — kullanılan güven düzeyi
+            'n_passes':   int        — kullanılan pass sayısı
+            'cv':         np.ndarray — varyasyon katsayısı (std/mean, %)
+                                       yüksek CV → tahmin güvenilmez
+        }
+
+    Örnek:
+        result = predict_lstm_with_uncertainty(model, X_test, scaler, n_passes=50)
+        mean   = result['mean']    # Ana tahmin
+        lower  = result['lower']   # Alt sınır
+        upper  = result['upper']   # Üst sınır
+
+        # Düşük güven uyarısı
+        high_uncertainty = result['cv'] > 5.0  # %5 üzeri CV
+    """
+    if len(X.shape) != 3:
+        raise ValueError(
+            f"X boyutu (samples, timesteps, features) olmalı, alınan: {X.shape}"
+        )
+
+    logger.info(
+        "MC Dropout belirsizlik analizi başlıyor: n_passes=%d, confidence=%.0f%%",
+        n_passes, confidence * 100
+    )
+
+    # ── N kez forward pass (training=True → Dropout aktif) ────────
+    all_preds = []
+    for i in range(n_passes):
+        # training=True ile Dropout eğitim modunda çalışır
+        preds = model(X, training=True)
+        all_preds.append(preds.numpy().flatten())
+
+    # shape: (n_passes, samples)
+    all_preds = np.array(all_preds)
+
+    # ── İstatistikler (normalize edilmiş uzayda) ──────────────────
+    mean_norm = all_preds.mean(axis=0)
+    std_norm  = all_preds.std(axis=0)
+
+    # Güven aralığı z-skoru: 0.90 → 1.645, 0.95 → 1.960, 0.99 → 2.576
+    from scipy.stats import norm as _norm
+    z = float(_norm.ppf(0.5 + confidence / 2))
+
+    lower_norm = mean_norm - z * std_norm
+    upper_norm = mean_norm + z * std_norm
+
+    # ── Scaler ile orijinal ölçeğe dön ───────────────────────────
+    def _inverse(arr: np.ndarray) -> np.ndarray:
+        if scaler is not None:
+            return scaler.inverse_transform(arr.reshape(-1, 1)).flatten()
+        return arr
+
+    mean_real  = _inverse(mean_norm)
+    lower_real = _inverse(lower_norm)
+    upper_real = _inverse(upper_norm)
+    std_real   = _inverse(std_norm) - _inverse(np.zeros_like(std_norm))
+
+    # Alt sınır negatif olmasın (fiyat)
+    lower_real = np.maximum(lower_real, 0.0)
+
+    # ── Varyasyon katsayısı (%) — güven göstergesi ────────────────
+    # Küçük mean'lere karşı sıfıra bölme koruması
+    cv = np.where(
+        np.abs(mean_real) > 1e-6,
+        (np.abs(std_real) / np.abs(mean_real)) * 100,
+        0.0
+    )
+
+    logger.info(
+        "MC Dropout tamamlandı: mean=%.2f±%.2f, CI=[%.2f, %.2f], CV=%.2f%%",
+        float(mean_real.mean()),
+        float(std_real.mean()),
+        float(lower_real.mean()),
+        float(upper_real.mean()),
+        float(cv.mean())
+    )
+
+    return {
+        'mean':       mean_real,
+        'std':        std_real,
+        'lower':      lower_real,
+        'upper':      upper_real,
+        'confidence': confidence,
+        'n_passes':   n_passes,
+        'cv':         cv,
+    }
 
 
 def predict_lstm(

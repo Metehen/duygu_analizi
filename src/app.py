@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional
-import logging
 import os
 import sys
 
@@ -21,12 +20,9 @@ from config import (
     LSTM_CONFIG, XGBOOST_CONFIG, SENTIMENT_METHOD
 )
 
-# Logging ayarla
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Loglama — merkezi modül (dosyaya yazar, rotasyon, session ID)
+from src.logger import get_logger, get_session_id
+logger = get_logger(__name__)
 
 
 def main():
@@ -104,7 +100,7 @@ def _display_tahmin_app():
     **Özellikler:**
     - 📰 RSS beslemelerinden haber toplama
     - 🧠 Türkçe BERT veya sözlük tabanlı duygu analizi
-    - 🤖 Gemini LLM ile gelişmiş haber yorumu (opsiyonel)
+    - 🤖 Groq LLM ile gelişmiş haber yorumu (opsiyonel)
     - 📊 Teknik göstergeler (EMA, RSI, MACD)
     - 🔮 LSTM ve XGBoost modelleri
     - 📉 Geriye dönük test ve performans metrikleri
@@ -125,68 +121,99 @@ def display_analysis_tab():
     """
     Ana analiz sekmesini görüntüler.
     """
+    # ── Session state varsayılanları (sayfa yenilenince parametreler korunur) ──
+    _ss_defaults = {
+        'symbol_selection': DEFAULT_SYMBOLS[0],
+        'symbol_manual':    '',
+        'start_date':       datetime.strptime(DEFAULT_START_DATE, '%Y-%m-%d').date(),
+        'end_date':         datetime.strptime(DEFAULT_END_DATE, '%Y-%m-%d').date(),
+        'lstm_epochs':      LSTM_CONFIG['epochs'],
+        'lstm_lookback':    LSTM_CONFIG['lookback'],
+        'sentiment_method': SENTIMENT_METHOD,
+        'enable_news_filter': True,
+        'min_relevance':    0.2,
+        'use_gemini':       False,
+    }
+    for key, val in _ss_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
     # Sidebar: Parametreler
     st.sidebar.header("⚙️ Analiz Parametreleri")
-    
+
     # Hisse sembolü seçimi (hem seçilebilir hem yazılabilir)
     st.sidebar.subheader("Hisse Senedi")
-    
+
     # Manuel giriş seçeneğini listeye ekle
     symbol_options = ["Manuel Gir..."] + DEFAULT_SYMBOLS
-    
+    sel_idx = symbol_options.index(st.session_state.symbol_selection) \
+              if st.session_state.symbol_selection in symbol_options else 1
+
     symbol_selection = st.sidebar.selectbox(
         "Hisse Sembolü Seçin veya Manuel Girin",
         options=symbol_options,
-        index=1,  # İlk gerçek hisse senedini varsayılan yap
+        index=sel_idx,
+        key='symbol_selection',
         help="Listeden seçin veya 'Manuel Gir...' seçeneğini kullanarak kendi sembolünüzü yazın"
     )
-    
+
     # Eğer "Manuel Gir..." seçildiyse, text input göster
     if symbol_selection == "Manuel Gir...":
         symbol = st.sidebar.text_input(
             "Hisse Sembolü",
-            value="",
+            value=st.session_state.symbol_manual,
             placeholder="Örn: THYAO.IS",
+            key='symbol_manual',
             help="Borsa Istanbul sembolü (.IS ile bitmelidir)"
         )
         if not symbol:
             st.sidebar.warning("⚠️ Lütfen bir hisse sembolü girin")
     else:
         symbol = symbol_selection
-    
+
     # Tarih aralığı
     st.sidebar.subheader("Tarih Aralığı")
-    
-    # Varsayılan tarihler
-    default_start = datetime.strptime(DEFAULT_START_DATE, '%Y-%m-%d')
-    default_end = datetime.strptime(DEFAULT_END_DATE, '%Y-%m-%d')
-    
-    # Bugünün tarihi
     today = datetime.now().date()
-    
+
     start_date = st.sidebar.date_input(
         "Başlangıç Tarihi",
-        value=default_start,
+        value=st.session_state.start_date,
         min_value=datetime(2020, 1, 1).date(),
         max_value=today,
+        key='start_date',
         help="Analiz başlangıç tarihi"
     )
-    
-    # Bitiş tarihi için min_value'yu dinamik olarak ayarla
-    # Eğer start_date default_end'den sonraysa, start_date'i kullan
-    end_min_value = max(start_date, default_start.date())
-    end_default_value = max(default_end.date(), end_min_value)
-    
+
+    end_min_value     = max(start_date, datetime(2020, 1, 2).date())
+    end_default_value = max(st.session_state.end_date, end_min_value)
     end_date = st.sidebar.date_input(
         "Bitiş Tarihi",
         value=end_default_value,
         min_value=end_min_value,
         max_value=today,
+        key='end_date',
         help="Analiz bitiş tarihi"
     )
     
     # Model parametreleri (gelişmiş ayarlar)
     with st.sidebar.expander("🔧 Gelişmiş Ayarlar"):
+        # ── Veri önbelleği ─────────────────────────────────────────
+        st.subheader("💾 Veri Önbelleği")
+        use_cache = st.checkbox(
+            "Önbellek kullan (SQLite)",
+            value=True,
+            help="Haber ve fiyat verilerini yerel veritabanında tutar. Tekrar tekrar RSS/Yahoo Finance isteklerini azaltır."
+        )
+        cache_hours = st.slider(
+            "Haber önbellek süresi (saat)",
+            min_value=1,
+            max_value=24,
+            value=6,
+            step=1,
+            help="Bu süreden yeni haberler önbellekten gelir. 0 = her zaman taze çek."
+        )
+
+        st.markdown("---")
         st.subheader("Haber Filtreleme")
         enable_news_filter = st.checkbox(
             "Hisse Özel Haber Filtresi",
@@ -282,15 +309,17 @@ def display_analysis_tab():
             max_value=200,
             value=LSTM_CONFIG['epochs'],
             step=10,
+            key='lstm_epochs',
             help="LSTM eğitim epoch sayısı"
         )
-        
+
         lstm_lookback = st.number_input(
             "Lookback Penceresi",
             min_value=10,
             max_value=120,
             value=LSTM_CONFIG['lookback'],
             step=10,
+            key='lstm_lookback',
             help="Geçmiş gün sayısı"
         )
 
@@ -328,8 +357,34 @@ def display_analysis_tab():
             "Yöntem",
             options=['bert', 'lexicon'],
             index=0 if SENTIMENT_METHOD == 'bert' else 1,
+            key='sentiment_method',
             help="BERT: Daha doğru ama yavaş, Lexicon: Hızlı ama basit"
         )
+
+        st.markdown("---")
+        st.subheader("⏱️ Haber Gecikme Analizi (Lag)")
+        auto_lag = st.checkbox(
+            "Otomatik Lag Tespit Et",
+            value=True,
+            help=(
+                "Analiz sırasında cross-correlation ile haberin fiyata kaç gün "
+                "sonra yansıdığını otomatik hesaplar ve o lag değerini kullanır."
+            )
+        )
+        manual_lag = 0
+        if not auto_lag:
+            manual_lag = st.slider(
+                "Manuel Lag (gün)",
+                min_value=0,
+                max_value=7,
+                value=0,
+                step=1,
+                help=(
+                    "0 = haber aynı gün fiyata yansır, "
+                    "1 = bir gün sonra yansır, vb."
+                )
+            )
+            st.caption(f"Seçilen lag: **{manual_lag} gün**")
 
         st.markdown("---")
         st.subheader("🤖 Groq LLM Desteği")
@@ -374,6 +429,9 @@ def display_analysis_tab():
         use_container_width=True,
         help="Analizi başlatmak için tıklayın"
     )
+    # Oturum bilgisi (loglarda eşleştirme için)
+    from src.logger import get_session_id
+    st.sidebar.caption(f"🔑 Oturum: `{get_session_id()}`")
     
     # Ana içerik alanı
     if analyze_button:
@@ -420,7 +478,11 @@ def display_analysis_tab():
             gemini_top_n=gemini_top_n,
             bert_weight=bert_weight,
             use_cached_model=use_cached_model,
-            cached_model_path=cached_model_path
+            cached_model_path=cached_model_path,
+            auto_lag=auto_lag,
+            manual_lag=manual_lag,
+            use_cache=use_cache,
+            cache_hours=cache_hours,
         )
     else:
         # İlk açılış mesajı
@@ -446,8 +508,8 @@ def display_analysis_tab():
         with col3:
             st.metric(
                 label="📊 Teknik Göstergeler",
-                value=7,
-                help="EMA (3), RSI, MACD (2), Volume MA"
+                value=19,
+                help="EMA×3, RSI, MACD×3, Stochastic×2, Bollinger×5, ATR×2, Volume MA, OBV"
             )
 
 
@@ -466,7 +528,11 @@ def run_analysis(
     gemini_top_n: int = 20,
     bert_weight: float = 0.5,
     use_cached_model: bool = False,
-    cached_model_path: str = None
+    cached_model_path: str = None,
+    auto_lag: bool = True,
+    manual_lag: int = 0,
+    use_cache: bool = True,
+    cache_hours: int = 6,
 ):
     """
     Tam analiz sürecini çalıştırır.
@@ -487,20 +553,24 @@ def run_analysis(
         bert_weight: Hibrit skorlamada BERT ağırlığı
         use_cached_model: Kaydedilmiş model kullanılsın mı
         cached_model_path: Kullanılacak model dosyasının yolu
+        auto_lag: True ise cross-correlation ile optimal lag otomatik bulunur
+        manual_lag: auto_lag=False ise bu değer kullanılır (0-7 gün)
+        cached_model_path: Kullanılacak model dosyasının yolu
     """
     # Import modülleri
-    from src.news_fetcher import fetch_rss_news, save_news
-    from src.sentiment import SentimentAnalyzer
-    from src.features import (
-        fetch_stock_data, 
+    from src.news_fetcher import fetch_rss_news
+    from src.sentiment import SentimentAnalyzer    from src.features import (
+        fetch_stock_data,
         calculate_technical_indicators,
         merge_sentiment_with_prices,
+        find_optimal_sentiment_lag,
         prepare_training_data
     )
     from src.model_lstm import (
         build_lstm_model,
         train_lstm_model,
         predict_lstm,
+        predict_lstm_with_uncertainty,
         save_lstm_model
     )
     from src.model_xgboost import (
@@ -560,71 +630,88 @@ def run_analysis(
     try:
         # 1. Haber Toplama
         st.header("📰 1. Haber Toplama")
-        st.info(f"📡 {len(selected_rss_feeds)} RSS kaynağından haber çekiliyor...")
-        
-        with st.spinner("RSS beslemelerinden haberler çekiliyor..."):
-            try:
-                # Filtreleme ile haber çek
-                news_df = fetch_rss_news(
-                    selected_rss_feeds, 
-                    max_articles=200,
-                    filter_keywords=filter_keywords if enable_news_filter else None,
-                    per_feed_limit=100  # Her kaynaktan daha fazla haber çek
-                )
-                
-                if news_df.empty:
-                    st.warning("⚠️ Hiç haber çekilemedi. Duygu analizi atlanacak.")
+
+        # ── Önbellek kontrolü ──────────────────────────────────────
+        from src.database import get_cached_news, cache_news as _cache_news
+
+        news_df = None
+        if use_cache:
+            cached = get_cached_news(
+                symbol=symbol if enable_news_filter else None,
+                hours_old=cache_hours
+            )
+            if cached is not None and len(cached) > 0:
+                news_df = cached
+                st.success(f"💾 Önbellekten {len(news_df)} haber yüklendi (son {cache_hours} saat)")
+
+        if news_df is None:
+            st.info(f"📡 {len(selected_rss_feeds)} RSS kaynağından haber çekiliyor...")
+            with st.spinner("RSS beslemelerinden haberler çekiliyor..."):
+                try:
+                    news_df = fetch_rss_news(
+                        selected_rss_feeds,
+                        max_articles=200,
+                        filter_keywords=filter_keywords if enable_news_filter else None,
+                        per_feed_limit=100
+                    )
+                    if news_df.empty:
+                        st.warning("⚠️ Hiç haber çekilemedi. Duygu analizi atlanacak.")
+                        news_df = None
+                    else:
+                        st.success(f"✅ {len(news_df)} ilgili haber başarıyla çekildi")
+                        # Önbelleğe kaydet
+                        if use_cache:
+                            try:
+                                _cache_news(news_df, symbol=symbol)
+                            except Exception as e:
+                                logger.warning("Haber önbelleğe kaydedilemedi: %s", e)
+                except Exception as e:
+                    st.error(f"❌ Haber toplama hatası: {e}")
+                    logger.error(f"Haber toplama hatası: {e}")
                     news_df = None
+
+        # ── Filtreleme ve gösterim (cache/fresh farketmez) ──────────
+        if news_df is not None and not news_df.empty:
+            # Ek filtreleme (daha hassas)
+            if enable_news_filter and 'relevance_score' not in news_df.columns:
+                from src.news_filter import filter_news_by_stock, get_relevance_summary
+
+                original_count = len(news_df)
+                news_df = filter_news_by_stock(
+                    news_df,
+                    symbol,
+                    min_relevance=min_relevance
+                )
+
+                if len(news_df) > 0:
+                    st.info(f"🎯 Hassas filtreleme sonrası: {len(news_df)}/{original_count} haber")
+                    summary = get_relevance_summary(news_df)
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Yüksek İlişkili", summary.get('high_relevance', 0))
+                    with col2:
+                        st.metric("Orta İlişkili", summary.get('medium_relevance', 0))
+                    with col3:
+                        st.metric("Düşük İlişkili", summary.get('low_relevance', 0))
                 else:
-                    st.success(f"✅ {len(news_df)} ilgili haber başarıyla çekildi")
-                    
-                    # Ek filtreleme (daha hassas)
-                    if enable_news_filter and not news_df.empty:
-                        from src.news_filter import filter_news_by_stock, get_relevance_summary
-                        
-                        original_count = len(news_df)
-                        news_df = filter_news_by_stock(
-                            news_df, 
-                            symbol, 
-                            min_relevance=min_relevance
-                        )
-                        
-                        if len(news_df) > 0:
-                            st.info(f"🎯 Hassas filtreleme sonrası: {len(news_df)}/{original_count} haber")
-                            
-                            # İlişki özeti
-                            summary = get_relevance_summary(news_df)
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Yüksek İlişkili", summary.get('high_relevance', 0))
-                            with col2:
-                                st.metric("Orta İlişkili", summary.get('medium_relevance', 0))
-                            with col3:
-                                st.metric("Düşük İlişkili", summary.get('low_relevance', 0))
-                        else:
-                            st.warning(f"⚠️ Hassas filtreleme sonrası haber kalmadı, tüm çekilen haberler kullanılacak")
-                            # Tüm çekilen haberleri kullan
-                            news_df = fetch_rss_news(
-                                selected_rss_feeds, 
-                                max_articles=200,
-                                filter_keywords=None,  # Filtresiz çek
-                                per_feed_limit=100
-                            )
-                            if not news_df.empty:
-                                news_df['relevance_score'] = 0.0  # Sıfır skor
-                    
-                    # Haber örnekleri göster
-                    with st.expander("📄 Örnek Haberler"):
-                        display_cols = ['date', 'title', 'source']
-                        if 'relevance_score' in news_df.columns:
-                            display_cols.append('relevance_score')
-                        st.dataframe(news_df.head(5)[display_cols])
-                    
-                    results['news_df'] = news_df
-            except Exception as e:
-                st.error(f"❌ Haber toplama hatası: {e}")
-                logger.error(f"Haber toplama hatası: {e}")
-                news_df = None
+                    st.warning("⚠️ Hassas filtreleme sonrası haber kalmadı, tüm çekilen haberler kullanılacak")
+                    news_df = fetch_rss_news(
+                        selected_rss_feeds,
+                        max_articles=200,
+                        filter_keywords=None,
+                        per_feed_limit=100
+                    )
+                    if not news_df.empty:
+                        news_df['relevance_score'] = 0.0
+
+            # Haber örnekleri göster
+            with st.expander("📄 Örnek Haberler"):
+                display_cols = ['date', 'title', 'source']
+                if 'relevance_score' in news_df.columns:
+                    display_cols.append('relevance_score')
+                st.dataframe(news_df.head(5)[display_cols])
+
+            results['news_df'] = news_df
         
         # 2. Duygu Analizi
         st.header("🧠 2. Duygu Analizi")
@@ -733,25 +820,71 @@ def run_analysis(
         st.header("📊 3. Özellik Hazırlama")
         with st.spinner("Hisse fiyat verileri çekiliyor ve teknik göstergeler hesaplanıyor..."):
             try:
-                # Fiyat verilerini çek
-                price_df = fetch_stock_data(symbol, start_date, end_date)
-                st.success(f"✅ {len(price_df)} günlük fiyat verisi çekildi")
-                
+                from src.exceptions import StockDataError, InsufficientDataError, ConfigError
+
+                # ── Fiyat önbellek kontrolü ──────────────────────────────
+                from src.database import get_cached_prices, cache_prices as _cache_prices
+
+                price_df = None
+                if use_cache:
+                    cached_prices = get_cached_prices(symbol, start_date, end_date)
+                    if cached_prices is not None:
+                        price_df = cached_prices
+                        st.success(f"💾 Önbellekten {len(price_df)} günlük fiyat verisi yüklendi")
+
+                if price_df is None:
+                    # Fiyat verilerini çek
+                    price_df = fetch_stock_data(symbol, start_date, end_date)
+                    st.success(f"✅ {len(price_df)} günlük fiyat verisi çekildi")
+                    # Önbelleğe kaydet
+                    if use_cache:
+                        try:
+                            _cache_prices(price_df, symbol)
+                        except Exception as e:
+                            logger.warning("Fiyat önbelleğe kaydedilemedi: %s", e)
+
                 # Teknik göstergeleri hesapla
                 price_df = calculate_technical_indicators(price_df)
                 st.success("✅ Teknik göstergeler hesaplandı")
-                
+
                 # Duygu skorlarını birleştir (eğer varsa)
                 if sentiment_df is not None:
-                    features_df = merge_sentiment_with_prices(price_df, sentiment_df)
-                    st.success("✅ Duygu skorları fiyat verileriyle birleştirildi")
+                    # ── Lag tespiti ────────────────────────────────
+                    if auto_lag:
+                        with st.spinner("🔍 Optimal lag hesaplanıyor..."):
+                            lag_result = find_optimal_sentiment_lag(
+                                price_df, sentiment_df, max_lag=7
+                            )
+                        used_lag = lag_result['optimal_lag']
+
+                        # Lag sonucunu göster
+                        with st.expander(f"⏱️ Lag Analizi Sonucu (Optimal: {used_lag} gün)", expanded=False):
+                            st.info(lag_result['interpretation'])
+                            corr_data = {
+                                'Lag (gün)': list(lag_result['correlations'].keys()),
+                                'Korelasyon': list(lag_result['correlations'].values()),
+                            }
+                            corr_df = pd.DataFrame(corr_data)
+                            corr_df['|Korelasyon|'] = corr_df['Korelasyon'].abs()
+                            corr_df = corr_df.sort_values('Lag (gün)')
+                            st.dataframe(corr_df.style.highlight_max(
+                                subset=['|Korelasyon|'], color='#d4f7d4'
+                            ), use_container_width=True)
+                    else:
+                        used_lag = manual_lag
+                        st.info(f"⏱️ Manuel lag kullanılıyor: **{used_lag} gün**")
+
+                    features_df = merge_sentiment_with_prices(price_df, sentiment_df, lag=used_lag)
+                    results['used_lag'] = used_lag
+                    st.success(f"✅ Duygu skorları fiyat verileriyle birleştirildi (lag={used_lag} gün)")
                 else:
                     features_df = price_df
+                    used_lag = 0
                     # Boş duygu skorları ekle
                     for col in ['sentiment_positive', 'sentiment_negative', 'sentiment_neutral', 'sentiment_compound']:
                         features_df[col] = 0.0
                     st.info("ℹ️ Duygu skorları olmadan devam ediliyor")
-                
+
                 # Özellik istatistikleri
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -760,12 +893,16 @@ def run_analysis(
                     st.metric("Özellik Sayısı", len(features_df.columns) - 1)  # date hariç
                 with col3:
                     st.metric("Ortalama Fiyat", f"₺{features_df['close'].mean():.2f}")
-                
+
                 results['features_df'] = features_df
-                
+
+            except (StockDataError, InsufficientDataError, ConfigError) as e:
+                st.error(f"❌ {e.user_message()}")
+                logger.error("Özellik hazırlama hatası: %s", e, exc_info=True)
+                return
             except Exception as e:
-                st.error(f"❌ Özellik hazırlama hatası: {e}")
-                logger.error(f"Özellik hazırlama hatası: {e}")
+                st.error(f"❌ Beklenmeyen hata: {e}")
+                logger.error("Özellik hazırlama beklenmeyen hatası: %s", e, exc_info=True)
                 return
         
         # 4. Model Eğitimi
@@ -824,8 +961,34 @@ def run_analysis(
                     )
                     st.success("✅ LSTM modeli eğitildi ve kaydedildi")
                 
-                # Tahmin yap — scaler ile orijinal fiyat ölçeğine dönüştür
-                lstm_predictions = predict_lstm(lstm_model, X_test, scaler=scaler)
+                # Tahmin yap — MC Dropout ile güven aralıklı tahmin
+                with st.spinner("📊 Monte Carlo Dropout ile güven aralığı hesaplanıyor..."):
+                    uncertainty_result = predict_lstm_with_uncertainty(
+                        lstm_model, X_test, scaler=scaler,
+                        n_passes=50, confidence=0.90
+                    )
+
+                lstm_predictions = uncertainty_result['mean']
+                lstm_lower       = uncertainty_result['lower']
+                lstm_upper       = uncertainty_result['upper']
+                lstm_cv          = uncertainty_result['cv']
+
+                # y_test normalize — gerçek fiyata çevir (metrik hesabı için)
+                y_test_real = scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
+
+                # Ortalama CV'ye göre güven uyarısı
+                mean_cv = float(lstm_cv.mean())
+                if mean_cv > 5.0:
+                    st.warning(
+                        f"⚠️ Model belirsizliği yüksek (CV={mean_cv:.1f}%). "
+                        "Tahminleri dikkatli değerlendirin. "
+                        "Daha fazla veri veya daha düşük dropout oranı deneyebilirsiniz."
+                    )
+                else:
+                    st.success(
+                        f"✅ Tahmin güven aralığı hesaplandı "
+                        f"(%90 CI, belirsizlik CV={mean_cv:.1f}%)"
+                    )
 
                 # y_test normalize — gerçek fiyata çevir (metrik hesabı için)
                 y_test_real = scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
@@ -835,10 +998,34 @@ def run_analysis(
 
                 # Kapsamlı metrikler
                 comprehensive_metrics = calculate_comprehensive_metrics(y_test_real, lstm_predictions)
-                
+
+                # ── Eğitim metadata'sı topla ────────────────────────────────
+                feature_list = [
+                    c for c in features_df.columns
+                    if c not in ('date', 'close') and pd.api.types.is_numeric_dtype(features_df[c])
+                ]
+
+                training_metadata = {
+                    'symbol':           symbol,
+                    'date_range':       {'start': start_date, 'end': end_date},
+                    'epochs':           lstm_epochs,
+                    'lookback':         lstm_lookback,
+                    'sentiment_method': sentiment_method,
+                    'lag':              results.get('used_lag', 0),
+                    'n_features':       X_train.shape[2],
+                    'feature_list':     feature_list,
+                    'n_train':          len(X_train),
+                    'n_test':           len(X_test),
+                    'mean_cv_pct':      round(mean_cv, 2),
+                    'groq_enabled':     bool(use_gemini),
+                }
+
                 # Model raporunu kaydet
                 report_path = f'models/training_history/{model_name}_report.json'
-                save_model_report(model_name, comprehensive_metrics, report_path)
+                save_model_report(
+                    model_name, comprehensive_metrics, report_path,
+                    training_metadata=training_metadata
+                )
                 
                 st.success(f"✅ Model raporu kaydedildi: {report_path}")
                 
@@ -850,9 +1037,12 @@ def run_analysis(
                 with col3:
                     st.metric("R²", f"{comprehensive_metrics['r2']:.3f}")
                 
-                results['lstm_model'] = lstm_model
+                results['lstm_model']       = lstm_model
                 results['lstm_predictions'] = lstm_predictions
-                results['lstm_metrics'] = lstm_metrics
+                results['lstm_lower']       = lstm_lower
+                results['lstm_upper']       = lstm_upper
+                results['lstm_cv']          = lstm_cv
+                results['lstm_metrics']     = lstm_metrics
                 results['comprehensive_metrics'] = comprehensive_metrics
                 results['y_test'] = y_test_real  # gerçek TL değerleri
                 results['scaler'] = scaler
@@ -889,7 +1079,7 @@ def run_analysis(
                 
             except Exception as e:
                 st.error(f"❌ LSTM eğitim hatası: {e}")
-                logger.error(f"LSTM eğitim hatası: {e}", exc_info=True)
+                logger.error("LSTM eğitim hatası: %s", e, exc_info=True)
                 import traceback
                 st.error(f"Detay: {traceback.format_exc()}")
                 return
@@ -996,6 +1186,28 @@ def run_analysis(
         
         # Başarı mesajı
         st.success("🎉 Analiz başarıyla tamamlandı!")
+        st.toast("✅ Analiz tamamlandı!", icon="🎉")
+
+        # ── Analiz sonucunu veritabanına kaydet ─────────────────────
+        try:
+            from src.database import save_analysis_result
+            from src.logger import get_session_id
+
+            save_params = {
+                'symbol':           symbol,
+                'start_date':       start_date,
+                'end_date':         end_date,
+                'epochs':           lstm_epochs,
+                'lookback':         lstm_lookback,
+                'sentiment_method':  sentiment_method,
+                'groq_enabled':      use_gemini,
+                'n_features':       results.get('features_df', pd.DataFrame()).shape[1] - 1,
+                'n_train':          len(X_train) if 'X_train' in dir() else None,
+                'n_test':           len(X_test) if 'X_test' in dir() else None,
+            }
+            save_analysis_result(results, save_params, session_id=get_session_id())
+        except Exception as e:
+            logger.warning("Analiz sonucu kaydedilemedi: %s", e)
         
     except Exception as e:
         st.error(f"❌ Beklenmeyen hata: {e}")
@@ -1015,13 +1227,43 @@ def display_results(results: dict):
         fig_price = plot_price_predictions(
             actual_prices=results['actual_prices'],
             predicted_prices=results['lstm_predictions'],
-            dates=results.get('test_dates', None)
+            dates=results.get('test_dates', None),
+            lower_bound=results.get('lstm_lower', None),
+            upper_bound=results.get('lstm_upper', None),
+            confidence=0.90,
         )
         st.plotly_chart(fig_price, use_container_width=True)
+
+        # CV tablosu — yüksek belirsizlikli tahminleri göster
+        if 'lstm_cv' in results:
+            mean_cv = float(results['lstm_cv'].mean())
+            high_unc = int((results['lstm_cv'] > 5.0).sum())
+            total    = len(results['lstm_cv'])
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric(
+                    "Ortalama Belirsizlik (CV)",
+                    f"{mean_cv:.1f}%",
+                    help="Varyasyon katsayısı — düşük iyidir (<5%)"
+                )
+            with c2:
+                st.metric(
+                    "Yüksek Belirsizlikli Tahmin",
+                    f"{high_unc}/{total}",
+                    help="CV > %5 olan tahmin sayısı"
+                )
 
         # Groq açıklaması varsa göster
         if 'llm_explanation' in results:
             st.info(f"🤖 **Groq Yorumu:** {results['llm_explanation']}")
+
+        # Lag bilgisi göster
+        if 'used_lag' in results:
+            lag_val = results['used_lag']
+            if lag_val == 0:
+                st.caption("⏱️ Haber-fiyat gecikmesi: **0 gün** (aynı gün eşleşme)")
+            else:
+                st.caption(f"⏱️ Haber-fiyat gecikmesi: **{lag_val} gün** (haberler {lag_val} gün sonraki fiyata kaydırıldı)")
     
     # Duygu Skorları Grafiği
     if 'sentiment_df' in results and results['sentiment_df'] is not None:
@@ -1072,60 +1314,90 @@ def display_results(results: dict):
 def plot_price_predictions(
     actual_prices: np.ndarray,
     predicted_prices: np.ndarray,
-    dates: Optional[np.ndarray] = None
+    dates: Optional[np.ndarray] = None,
+    lower_bound: Optional[np.ndarray] = None,
+    upper_bound: Optional[np.ndarray] = None,
+    confidence: float = 0.90,
 ) -> 'plotly.graph_objects.Figure':
     """
     Gerçek ve tahmin edilen fiyatları görselleştirir.
-    
+    Güven aralığı verilmişse şeffaf band olarak gösterir.
+
     Args:
-        actual_prices: Gerçek fiyatlar
-        predicted_prices: Tahmin edilen fiyatlar
-        dates: Tarih dizisi (opsiyonel)
-    
+        actual_prices:   Gerçek fiyatlar
+        predicted_prices: Tahmin edilen fiyatlar (MC Dropout ortalaması)
+        dates:           Tarih dizisi (opsiyonel)
+        lower_bound:     Güven aralığı alt sınırı (opsiyonel)
+        upper_bound:     Güven aralığı üst sınırı (opsiyonel)
+        confidence:      Güven düzeyi (etiket için kullanılır)
+
     Returns:
         Plotly figure objesi
     """
     import plotly.graph_objects as go
-    
-    # X ekseni için index veya tarih kullan
+
     if dates is not None:
         x_axis = dates
         x_title = "Tarih"
     else:
         x_axis = np.arange(len(actual_prices))
         x_title = "Zaman Adımı"
-    
-    # Figure oluştur
+
     fig = go.Figure()
-    
-    # Gerçek fiyatlar
+
+    # ── Güven bandı (önce ekle — arka planda kalır) ───────────────
+    if lower_bound is not None and upper_bound is not None:
+        ci_label = f"%{int(confidence * 100)} Güven Aralığı"
+
+        # Üst sınır
+        fig.add_trace(go.Scatter(
+            x=x_axis,
+            y=upper_bound,
+            mode='lines',
+            name=ci_label,
+            line=dict(width=0),
+            showlegend=True,
+        ))
+        # Alt sınır — fill'to previous trace ile band oluşur
+        fig.add_trace(go.Scatter(
+            x=x_axis,
+            y=lower_bound,
+            mode='lines',
+            name=ci_label,
+            line=dict(width=0),
+            fill='tonexty',
+            fillcolor='rgba(255, 100, 100, 0.15)',
+            showlegend=False,
+        ))
+
+    # ── Gerçek fiyatlar ───────────────────────────────────────────
     fig.add_trace(go.Scatter(
         x=x_axis,
         y=actual_prices,
         mode='lines',
         name='Gerçek Fiyat',
-        line=dict(color='blue', width=2)
+        line=dict(color='royalblue', width=2)
     ))
-    
-    # Tahmin edilen fiyatlar
+
+    # ── Tahmin edilen fiyatlar ────────────────────────────────────
     fig.add_trace(go.Scatter(
         x=x_axis,
         y=predicted_prices,
         mode='lines',
-        name='Tahmin Edilen Fiyat',
-        line=dict(color='red', width=2, dash='dash')
+        name='Tahmin (Ortalama)',
+        line=dict(color='crimson', width=2, dash='dash')
     ))
-    
-    # Layout ayarları
+
     fig.update_layout(
         title='Gerçek vs Tahmin Edilen Fiyatlar',
         xaxis_title=x_title,
         yaxis_title='Fiyat (₺)',
         hovermode='x unified',
         template='plotly_white',
-        height=500
+        height=500,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
     )
-    
+
     return fig
 
 
@@ -1262,7 +1534,8 @@ def display_model_performance():
         load_model_reports,
         select_best_model,
         plot_training_history,
-        plot_metrics_comparison
+        plot_metrics_comparison,
+        delete_model_files,
     )
     
     st.header("📈 Model Performans Analizi")
@@ -1388,7 +1661,39 @@ def display_model_performance():
             """)
     else:
         st.warning("⚠️ Bu model için metrik bilgisi bulunamadı.")
-    
+
+    # ── Eğitim Metadata'sı ────────────────────────────────────────
+    if 'training_metadata' in report:
+        meta = report['training_metadata']
+        st.markdown("---")
+        st.subheader("🏷️ Eğitim Parametreleri")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Hisse", meta.get('symbol', '—'))
+            st.metric("Epoch", meta.get('epochs', '—'))
+        with col2:
+            st.metric("Lookback", meta.get('lookback', '—'))
+            st.metric("Özellik", meta.get('n_features', '—'))
+        with col3:
+            st.metric("Lag (gün)", meta.get('lag', 0))
+            st.metric("CV %", f"{meta.get('mean_cv_pct', '—')}")
+        with col4:
+            st.metric("Duygu Analizi", meta.get('sentiment_method', '—'))
+            st.metric("Groq", "✅" if meta.get('groq_enabled') else "—")
+
+        date_range = meta.get('date_range', {})
+        if date_range:
+            st.caption(
+                f"📅 Tarih aralığı: {date_range.get('start', '?')} → {date_range.get('end', '?')}  "
+                f"|  Eğitim: {meta.get('n_train', '?')} örnek, Test: {meta.get('n_test', '?')} örnek"
+            )
+
+        # Özellik listesi
+        feature_list = meta.get('feature_list', [])
+        if feature_list:
+            with st.expander(f"📋 Kullanılan Özellikler ({len(feature_list)} adet)"):
+                st.code(", ".join(feature_list))
+
     st.markdown("---")
     
     # Eğitim Geçmişi Grafiği
@@ -1509,8 +1814,89 @@ def display_model_performance():
     
     else:
         st.info("ℹ️ Model karşılaştırma için birden fazla model raporu gerekli. Daha fazla analiz çalıştırarak farklı model versiyonları oluşturabilirsiniz.")
-    
-    # Model rapor bilgileri
+
+    # ── Geçmiş Analiz Karşılaştırması ─────────────────────────────
+    st.markdown("---")
+    st.subheader("📜 Geçmiş Analizler")
+    try:
+        from src.database import get_analysis_history
+
+        hist_symbol = st.selectbox(
+            "Hisse filtrele:",
+            options=["Tümü"] + DEFAULT_SYMBOLS,
+            index=0,
+            key="hist_symbol_filter"
+        )
+        hist_df = get_analysis_history(
+            symbol=None if hist_symbol == "Tümü" else hist_symbol,
+            limit=50
+        )
+
+        if hist_df.empty:
+            st.info("ℹ️ Henüz kaydedilmiş analiz geçmişi yok. Analiz çalıştırdıkça burada birikir.")
+        else:
+            # Özet tablo
+            display_cols = {
+                'timestamp': 'Zaman',
+                'symbol': 'Hisse',
+                'sentiment_method': 'Yöntem',
+                'lag': 'Lag',
+                'epochs': 'Epoch',
+                'lookback': 'Lookback',
+                'rmse': 'RMSE',
+                'r2': 'R²',
+                'directional_accuracy': 'Yön Doğruluğu',
+                'total_return': 'Getiri %',
+                'mean_cv': 'CV %',
+            }
+            available = [c for c in display_cols if c in hist_df.columns]
+            hist_display = hist_df[available].rename(columns=display_cols)
+            # Sayısal sütunları yuvarla
+            for col in ['RMSE', 'R²', 'Yön Doğruluğu', 'Getiri %', 'CV %']:
+                if col in hist_display.columns:
+                    hist_display[col] = pd.to_numeric(hist_display[col], errors='coerce').round(3)
+            # Zamanı kısalt
+            if 'Zaman' in hist_display.columns:
+                hist_display['Zaman'] = hist_display['Zaman'].str[:16]
+
+            st.dataframe(hist_display, use_container_width=True, hide_index=True)
+
+            st.caption(f"Toplam {len(hist_df)} analiz kaydı")
+
+            # Aynı hisse için metrik trendi
+            if hist_symbol != "Tümü" and len(hist_df) >= 2:
+                st.markdown("**📈 Metrik Trendi (son analizler)**")
+                trend_metrics = ['rmse', 'r2', 'directional_accuracy', 'total_return']
+                trend_cols = st.multiselect(
+                    "Gösterilecek metrikler:",
+                    options=trend_metrics,
+                    default=['rmse', 'directional_accuracy'],
+                    key="trend_metrics"
+                )
+                if trend_cols:
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    for metric in trend_cols:
+                        vals = pd.to_numeric(hist_df[metric], errors='coerce')
+                        fig.add_trace(go.Scatter(
+                            x=list(range(len(hist_df))),
+                            y=vals,
+                            mode='lines+markers',
+                            name=metric
+                        ))
+                    fig.update_layout(
+                        xaxis_title="Analiz Sırası",
+                        yaxis_title="Değer",
+                        template='plotly_white',
+                        height=300
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.warning(f"Analiz geçmişi yüklenemedi: {e}")
+        logger.warning("Analiz geçmişi yükleme hatası: %s", e)
+
+    # Model rapor bilgileri + silme
     st.markdown("---")
     with st.expander("ℹ️ Model Rapor Bilgileri"):
         st.write(f"**Model Adı:** {selected_model}")
@@ -1518,6 +1904,26 @@ def display_model_performance():
             st.write(f"**Oluşturulma Zamanı:** {report['timestamp']}")
         st.write(f"**Rapor Dizini:** {reports_dir}")
         st.write(f"**Toplam Model Sayısı:** {len(model_reports)}")
+
+    # ── Model silme (onaylı) ──────────────────────────────────────
+    with st.expander("🗑️ Modeli Sil", expanded=False):
+        st.warning(
+            f"**{selected_model}** modeline ait tüm dosyalar silinecek "
+            "(.keras, .csv, .json). Bu işlem geri alınamaz."
+        )
+        confirm_delete = st.checkbox("Eminim, sil", key=f"confirm_del_{selected_model}")
+        if confirm_delete:
+            if st.button("🗑️ Kalıcı Olarak Sil", type="primary", key=f"del_btn_{selected_model}"):
+                result = delete_model_files(selected_model, reports_dir)
+                if result['deleted']:
+                    st.success(f"✅ {len(result['deleted'])} dosya silindi")
+                    for f in result['deleted']:
+                        st.caption(f"  • {os.path.basename(f)}")
+                if result['errors']:
+                    st.error(f"❌ {len(result['errors'])} dosya silinemedi")
+                    for e in result['errors']:
+                        st.caption(f"  • {e}")
+                st.rerun()
 
 
 if __name__ == "__main__":

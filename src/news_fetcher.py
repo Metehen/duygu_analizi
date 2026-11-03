@@ -5,19 +5,14 @@ Bu modül RSS beslemelerinden Türkçe ekonomi haberlerini toplar,
 yapılandırır ve CSV/JSON formatında kaydeder.
 """
 
-import logging
+from src.logger import get_logger
 from typing import List, Optional
 from datetime import datetime
 import pandas as pd
 import feedparser
 from dateutil import parser as date_parser
 
-# Logging yapılandırması
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def fetch_rss_news(

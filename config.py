@@ -129,12 +129,29 @@ DEFAULT_END_DATE = '2024-01-01'
 
 # Teknik Gösterge Parametreleri
 TECHNICAL_INDICATORS = {
+    # Trend
     'ema_periods': [10, 20, 50],
+
+    # Momentum
     'rsi_period': 14,
     'macd_fast': 12,
     'macd_slow': 26,
     'macd_signal': 9,
-    'volume_ma_period': 20
+    'stoch_k_period': 14,
+    'stoch_d_period': 3,
+
+    # Volatilite
+    'bb_period': 20,
+    'bb_std_dev': 2.0,
+    'atr_period': 14,
+
+    # Hacim
+    'volume_ma_period': 20,
+
+    # LSTM'e giren toplam gösterge sayısı (referans)
+    # EMA×3, RSI, MACD×3(line+signal+hist), Stoch×2,
+    # BB×5(upper+middle+lower+width+pct_b), ATR×2(raw+pct),
+    # Volume MA, OBV norm = ~19 teknik gösterge
 }
 
 # Geriye Dönük Test Ayarları

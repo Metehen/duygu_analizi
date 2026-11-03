@@ -4,13 +4,12 @@ Türkçe metinler için duygu analizi yapar.
 BERT veya sözlük tabanlı yöntem kullanır.
 """
 
-import logging
+from src.logger import get_logger
 from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
 
-# Logging ayarları
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SentimentAnalyzer:

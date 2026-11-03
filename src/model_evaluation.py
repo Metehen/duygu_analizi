@@ -312,24 +312,77 @@ def plot_metrics_comparison(metrics_dict: Dict[str, Dict[str, float]]) -> plt.Fi
 def save_model_report(
     model_name: str,
     metrics: Dict[str, float],
-    save_path: str
+    save_path: str,
+    training_metadata: Optional[Dict[str, Any]] = None
 ) -> None:
     """
     Model performans raporunu JSON formatında kaydeder.
-    
+
     Args:
-        model_name: Model adı
-        metrics: Performans metrikleri
-        save_path: Kayıt yolu
+        model_name:         Model adı
+        metrics:            Performans metrikleri
+        save_path:           Kayıt yolu
+        training_metadata:  Eğitim bağlam bilgisi (opsiyonel).
+                            Şunları içerebilir:
+                            - symbol:          Hisse sembolü
+                            - date_range:      (start_date, end_date)
+                            - epochs:          Epoch sayısı
+                            - lookback:        Lookback penceresi
+                            - sentiment_method: bert/lexicon
+                            - lag:             Haber gecikme değeri
+                            - n_features:      Özellik sayısı
+                            - feature_list:    Özellik isimleri listesi
+                            - n_train / n_test: Eğitim/test örnek sayısı
+                            - mean_cv:         MC Dropout ortalama CV
+                            - use_gemini:      Groq kullanıldı mı
     """
     report = {
         'model_name': model_name,
         'timestamp': datetime.now().isoformat(),
-        'metrics': metrics
+        'metrics': metrics,
     }
-    
+
+    if training_metadata is not None:
+        report['training_metadata'] = training_metadata
+
     with open(save_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
+
+
+def delete_model_files(model_name: str, save_dir: str = 'models/training_history/') -> dict:
+    """
+    Bir modele ait tüm dosyaları siler (keras, history csv, report json).
+
+    Args:
+        model_name: Model adı (örn: lstm_THYAO_20260919_143022)
+        save_dir:   Dosyaların bulunduğu dizin
+
+    Returns:
+        {'deleted': [dosya_yolları], 'errors': [hata_mesajları]}
+    """
+    import glob as _glob
+
+    deleted = []
+    errors  = []
+
+    # Modelle ilişkili tüm dosyaları bul
+    patterns = [
+        f"{model_name}_best.keras",
+        f"{model_name}_history.csv",
+        f"{model_name}_report.json",
+        f"{model_name}_training_log.csv",
+    ]
+
+    for pattern in patterns:
+        path = os.path.join(save_dir, pattern)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                deleted.append(path)
+            except Exception as e:
+                errors.append(f"{path}: {e}")
+
+    return {'deleted': deleted, 'errors': errors}
 
 
 def load_model_reports(reports_dir: str) -> Dict[str, Dict]:

@@ -33,6 +33,7 @@ venv.bak/
 # IDEs
 .vscode/
 .idea/
+.kiro/
 *.swp
 *.swo
 *~
@@ -47,6 +48,7 @@ data/*.csv
 data/*.json
 data/*.pkl
 data/*.parquet
+data/*.db
 !data/.gitkeep
 
 # Model files
@@ -56,6 +58,7 @@ models/*.pkl
 models/*.joblib
 models/*.pt
 models/*.pth
+models/training_history/
 !models/.gitkeep
 
 # Logs
@@ -86,6 +89,8 @@ Thumbs.db
 *.temp
 tmp/
 temp/
+pip_freeze_temp.txt
+uygulamayı_başlat.bat
 
 # Cache
 .cache/

@@ -4,10 +4,10 @@ Haberleri hisse senedi ile ilişkisine göre filtreler.
 """
 
 import pandas as pd
-import logging
 from typing import List, Dict
+from src.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Hisse senedi için anahtar kelime haritası
 STOCK_KEYWORDS = {
